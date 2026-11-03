@@ -414,20 +414,7 @@ function movement(
 
 export async function seedDatabase(force = false): Promise<void> {
   const existing = await db.settings.get('shop')
-  if (existing && !force) {
-    await db.transaction('rw', [db.brands, db.models, db.variants], async () => {
-      for (const brand of seedBrands) {
-        if (!(await db.brands.get(brand.id))) await db.brands.add(brand)
-      }
-      for (const model of seedModels) {
-        if (!(await db.models.get(model.id))) await db.models.add(model)
-      }
-      for (const variant of seedVariants) {
-        if (!(await db.variants.get(variant.id))) await db.variants.add(variant)
-      }
-    })
-    return
-  }
+  if (existing && !force) return
 
   const settings = defaultSettings()
   if (existing) settings.deviceId = existing.deviceId

@@ -20,13 +20,6 @@ export function startOfDay(date: Date): Date {
   return next
 }
 
-function localDateKey(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 export function rangeFor(period: ReportPeriod, now = new Date()): { start: Date | null; end: Date } {
   const end = new Date(now.getTime() + 1000)
   if (period === 'all') return { start: null, end }
@@ -191,12 +184,11 @@ export function buildReport({ units, sales, rate, brandNames, period }: ReportIn
 
   const trend: { date: string; count: number; revenueIQD: number }[] = []
   const now = new Date()
-  const allCompleted = sales.filter((sale) => sale.status === 'completed')
   for (let i = 6; i >= 0; i--) {
     const day = startOfDay(now)
     day.setDate(day.getDate() - i)
-    const key = localDateKey(day)
-    const daySales = allCompleted.filter((sale) => localDateKey(new Date(sale.soldAt)) === key)
+    const key = day.toISOString().slice(0, 10)
+    const daySales = completed.filter((sale) => sale.soldAt.slice(0, 10) === key)
     trend.push({
       date: key,
       count: daySales.length,

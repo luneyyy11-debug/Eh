@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import { useApp } from '../context/AppContext'
@@ -7,12 +8,11 @@ import { useErrorMessage } from '../i18n/useError'
 import { addUnit } from '../services/inventory'
 import { generateUniqueBarcode } from '../services/barcode'
 import { parseAmount } from '../services/money'
-import { Button, Card, Field, ModelImage, PageHeader, Segmented } from '../components/ui'
+import { Button, Card, Field, ModelImage, PageHeader, SearchInput, Segmented } from '../components/ui'
 import { Icon } from '../components/Icon'
 import type { Condition, Currency } from '../types'
 
 interface UnitFormState {
-  modelId: string
   variantId: string
   ram: string
   storage: string
@@ -36,7 +36,6 @@ interface UnitFormState {
 }
 
 const emptyForm = (): UnitFormState => ({
-  modelId: '',
   variantId: '',
   ram: '',
   storage: '',
@@ -60,9 +59,10 @@ const emptyForm = (): UnitFormState => ({
 })
 
 export default function AddStockPage() {
-  const { user } = useApp()
+  const { user, notify } = useApp()
   const { t } = useI18n()
   const error = useErrorMessage()
+  const navigate = useNavigate()
 
   const brands = useLiveQuery(() => db.brands.toArray(), [])
   const models = useLiveQuery(() => db.models.toArray(), [])
@@ -71,8 +71,10 @@ export default function AddStockPage() {
   const [step, setStep] = useState(1)
   const [brandId, setBrandId] = useState('')
   const [modelId, setModelId] = useState('')
+  const [modelSearch, setModelSearch] = useState('')
   const [variantId, setVariantId] = useState('')
   const [customVariant, setCustomVariant] = useState(false)
+  const [savedUnitId, setSavedUnitId] = useState<string | null>(null)
   const [form, setForm] = useState<UnitFormState>(emptyForm())
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
@@ -81,8 +83,29 @@ export default function AddStockPage() {
   const brandList = useMemo(() => (brands ?? []).filter((b) => b.id === brandId), [brands, brandId])
   const brand = brandList[0]
   const modelList = useMemo(() => (models ?? []).filter((m) => m.brandId === brandId && m.active), [models, brandId])
+  const filteredModels = useMemo(() => {
+    const query = modelSearch.trim().toLowerCase()
+    if (!query) return modelList
+    return modelList.filter((model) =>
+      [model.name, model.family ?? '', model.specs ?? ''].some((value) => value.toLowerCase().includes(query))
+    )
+  }, [modelList, modelSearch])
   const selectedModel = useMemo(() => (models ?? []).find((m) => m.id === modelId), [models, modelId])
   const modelVariants = useMemo(() => (variants ?? []).filter((v) => v.modelId === modelId && v.active), [variants, modelId])
+
+  useEffect(() => {
+    let cancelled = false
+    void generateUniqueBarcode()
+      .then((barcode) => {
+        if (!cancelled) setForm((current) => current.barcode ? current : { ...current, barcode })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) notify(error(err), 'error')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [error, notify])
 
   const set = <K extends keyof UnitFormState>(key: K, value: UnitFormState[K]) => {
     setForm((current) => ({ ...current, [key]: value }))
@@ -97,16 +120,28 @@ export default function AddStockPage() {
   const pickBrand = (id: string) => {
     setBrandId(id)
     setModelId('')
+    setModelSearch('')
     setVariantId('')
+    setCustomVariant(false)
+    setForm((current) => ({ ...current, ram: '', storage: '', colour: '' }))
   }
 
   const pickModel = (id: string) => {
     setModelId(id)
     setVariantId('')
+    setCustomVariant(!((variants ?? []).some((variant) => variant.modelId === id && variant.active)))
+    setForm((current) => ({ ...current, ram: '', storage: '', colour: '', region: 'Global' }))
+    setErrors((current) => {
+      if (!current.modelId) return current
+      const next = { ...current }
+      delete next.modelId
+      return next
+    })
   }
 
   const pickVariant = (id: string) => {
     setVariantId(id)
+    setCustomVariant(false)
     const variant = modelVariants.find((v) => v.id === id)
     if (variant) {
       setForm((current) => ({
@@ -121,7 +156,7 @@ export default function AddStockPage() {
 
   const validateDetails = (): boolean => {
     const next: Record<string, string> = {}
-    if (!form.modelId) next.modelId = t('addStock.selectModelFirst')
+    if (!modelId) next.modelId = t('addStock.selectModelFirst')
     if (!form.ram.trim()) next.ram = t('addStock.requiredFields')
     if (!form.storage.trim()) next.storage = t('addStock.requiredFields')
     if (!form.colour.trim()) next.colour = t('addStock.requiredFields')
@@ -129,19 +164,36 @@ export default function AddStockPage() {
       const value = Number(form.batteryHealth)
       if (!Number.isFinite(value) || value < 0 || value > 100) next.batteryHealth = t('addStock.batteryInvalid')
     }
-    const imei = form.imei1.trim() || form.imei2.trim()
-    if (imei && !/^\d{14,17}$/.test(imei)) next.imei1 = t('addStock.imeiInvalid')
-    if (form.sellingPrice.trim() !== '' && Number(form.sellingPrice) <= 0) next.sellingPrice = t('addStock.priceInvalid')
-    if (form.purchaseCost.trim() !== '' && Number(form.purchaseCost) < 0) next.purchaseCost = t('error.cost_invalid')
+    if (form.imei1.trim() && !/^\d{14,17}$/.test(form.imei1.trim())) next.imei1 = t('addStock.imeiInvalid')
+    if (form.imei2.trim() && !/^\d{14,17}$/.test(form.imei2.trim())) next.imei2 = t('addStock.imeiInvalid')
+    if (!form.sellingPrice.trim() || !Number.isFinite(Number(form.sellingPrice)) || Number(form.sellingPrice) <= 0) {
+      next.sellingPrice = t('addStock.priceInvalid')
+    }
+    if (form.purchaseCost.trim() !== '' && (!Number.isFinite(Number(form.purchaseCost)) || Number(form.purchaseCost) < 0)) {
+      next.purchaseCost = t('error.cost_invalid')
+    }
     setErrors(next)
     return Object.keys(next).length === 0
   }
 
-  const save = async () => {
+  const save = async (addAnother = false) => {
     if (!user) return
-    if (!validateDetails()) return
+    if (!validateDetails()) {
+      if (!modelId || !form.ram.trim() || !form.storage.trim() || !form.colour.trim()) {
+        setStep(1)
+      } else if (
+        (form.batteryHealth.trim() !== '' && (!Number.isFinite(Number(form.batteryHealth)) || Number(form.batteryHealth) < 0 || Number(form.batteryHealth) > 100)) ||
+        (form.imei1.trim() !== '' && !/^\d{14,17}$/.test(form.imei1.trim())) ||
+        (form.imei2.trim() !== '' && !/^\d{14,17}$/.test(form.imei2.trim())) ||
+        (form.purchaseCost.trim() !== '' && (!Number.isFinite(Number(form.purchaseCost)) || Number(form.purchaseCost) < 0))
+      ) {
+        setStep(2)
+      }
+      return
+    }
     setBusy(true)
     try {
+      const nextBarcode = addAnother ? await generateUniqueBarcode() : ''
       const purchased = parseAmount(form.purchaseCost, form.purchaseCurrency)
       const sold = parseAmount(form.sellingPrice, form.sellingCurrency)
       const unit = await addUnit(
@@ -167,31 +219,87 @@ export default function AddStockPage() {
           sellingPrice: sold,
           sellingCurrency: form.sellingCurrency,
           exchangeRate: Number(form.exchangeRate) || 0,
-          barcode: form.barcode,
-          shortId: form.barcode.trim().toUpperCase().replace(/^SHP-/i, '') || undefined
+          barcode: form.barcode
         },
         user
       )
-      // addUnit ignores shortId semantics only when absent; keep generated barcode authoritative
-      void unit
-      const nextBarcode = await generateUniqueBarcode()
-      void nextBarcode
-      return
+      if (addAnother) {
+        resetForAnother(nextBarcode)
+      } else {
+        setSavedUnitId(unit.id)
+      }
+      notify(t('addStock.savedTitle'))
     } catch (err) {
-      error(err)
-      return
+      notify(error(err), 'error')
     } finally {
       setBusy(false)
     }
   }
 
   const generateBarcode = async () => {
-    const barcode = await generateUniqueBarcode()
-    set('barcode', barcode)
+    try {
+      const barcode = await generateUniqueBarcode()
+      set('barcode', barcode)
+    } catch (err) {
+      notify(error(err), 'error')
+    }
+  }
+
+  const resetForAnother = (barcode: string) => {
+    setSavedUnitId(null)
+    setStep(1)
+    setBrandId('')
+    setModelId('')
+    setModelSearch('')
+    setVariantId('')
+    setCustomVariant(false)
+    setForm({ ...emptyForm(), barcode })
+    setErrors({})
+  }
+
+  const startAnother = async () => {
+    try {
+      resetForAnother(await generateUniqueBarcode())
+    } catch (err) {
+      notify(error(err), 'error')
+    }
+  }
+
+  if (savedUnitId) {
+    return (
+      <div className="add-stock-page" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <PageHeader title={t('addStock.savedTitle')} />
+        <Card>
+          <div className="section-header" style={{ marginTop: 0 }}>
+            <div className="section-title-wrap">
+              <span className="section-icon">
+                <Icon name="check" size={18} />
+              </span>
+              <div>
+                <h2>{selectedModel?.name ?? t('addStock.savedTitle')}</h2>
+                <p className="muted">{t('addStock.savedHint')}</p>
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <Button icon="eye" onClick={() => void navigate(`/stock/${savedUnitId}`)}>
+              {t('addStock.viewUnit')}
+            </Button>
+            <Button
+              variant="secondary"
+              icon="plus"
+              onClick={() => void startAnother()}
+            >
+              {t('addStock.addAnother')}
+            </Button>
+          </div>
+        </Card>
+      </div>
+    )
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div className="add-stock-page" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <PageHeader
         title={t('addStock.title')}
         subtitle={t('addStock.subtitle')}
@@ -223,14 +331,17 @@ export default function AddStockPage() {
             </div>
           </div>
           {!brand ? (
-            <div className="grid grid-3">
-              {activeBrands.map((b) => (
-                <button key={b.id} type="button" className="card pick-card" onClick={() => pickBrand(b.id)}>
-                  <span className="pick-swatch" style={{ background: b.color }} />
-                  <strong>{b.name}</strong>
-                </button>
-              ))}
-            </div>
+            <>
+              {errors.modelId ? <p className="field-message">{errors.modelId}</p> : null}
+              <div className="grid grid-3 add-stock-brands">
+                {activeBrands.map((b) => (
+                  <button key={b.id} type="button" className="card pick-card" onClick={() => pickBrand(b.id)}>
+                    <span className="pick-swatch" style={{ background: b.color }} />
+                    <strong>{b.name}</strong>
+                  </button>
+                ))}
+              </div>
+            </>
           ) : (
             <>
               <div className="toolbar">
@@ -239,8 +350,15 @@ export default function AddStockPage() {
                 </button>
                 <span className="badge badge-brand">{brand.name}</span>
               </div>
-              <div className="grid grid-3">
-                {modelList.map((m) => (
+              <SearchInput
+                value={modelSearch}
+                onChange={setModelSearch}
+                placeholder={t('addStock.searchModels')}
+                ariaLabel={t('addStock.searchModels')}
+              />
+              {errors.modelId && !modelId ? <p className="field-message">{errors.modelId}</p> : null}
+              <div className="grid grid-3 add-stock-models">
+                {filteredModels.map((m) => (
                   <button key={m.id} type="button" className={`card model-card ${m.id === modelId ? 'model-card-active' : ''}`} onClick={() => pickModel(m.id)}>
                     <span className="model-card-img">
                       <ModelImage src={m.image} alt={m.name} size="sm" />
@@ -250,6 +368,7 @@ export default function AddStockPage() {
                   </button>
                 ))}
               </div>
+              {filteredModels.length === 0 ? <p className="muted">{t('addStock.noModels')}</p> : null}
               {modelId ? (
                 <div style={{ marginTop: 18 }}>
                   <div className="section-header" style={{ margin: '18px 0 12px' }}>
@@ -262,7 +381,7 @@ export default function AddStockPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="list">
+                  <div className="list add-stock-variants">
                     {modelVariants.map((v) => (
                       <label key={v.id} className="list-row" style={{ cursor: 'pointer' }}>
                         <input type="radio" name="variant" checked={variantId === v.id} onChange={() => pickVariant(v.id)} />
@@ -275,6 +394,7 @@ export default function AddStockPage() {
                       </label>
                     ))}
                   </div>
+                  {modelVariants.length === 0 ? <p className="muted">{t('addStock.noVariantPresets')}</p> : null}
                   <div className="toolbar" style={{ marginTop: 12 }}>
                     <Button variant="secondary" onClick={() => setCustomVariant((value) => !value)}>
                       {t('addStock.custom')}
@@ -282,13 +402,13 @@ export default function AddStockPage() {
                   </div>
                   {customVariant ? (
                     <div className="grid grid-2">
-                      <Field label={t('addStock.ram')}>
+                      <Field label={t('addStock.ram')} required error={errors.ram}>
                         <input type="text" value={form.ram} onChange={(e) => set('ram', e.target.value)} />
                       </Field>
-                      <Field label={t('addStock.storage')}>
+                      <Field label={t('addStock.storage')} required error={errors.storage}>
                         <input type="text" value={form.storage} onChange={(e) => set('storage', e.target.value)} />
                       </Field>
-                      <Field label={t('addStock.colour')}>
+                      <Field label={t('addStock.colour')} required error={errors.colour}>
                         <input type="text" value={form.colour} onChange={(e) => set('colour', e.target.value)} />
                       </Field>
                       <Field label={t('addStock.region')}>
@@ -328,14 +448,14 @@ export default function AddStockPage() {
                 ]}
               />
             </Field>
-            <Field label={t('addStock.batteryHealth')}>
+            <Field label={t('addStock.batteryHealth')} error={errors.batteryHealth}>
               <input type="number" min={0} max={100} value={form.batteryHealth} onChange={(e) => set('batteryHealth', e.target.value)} />
               <span className="field-hint">{t('addStock.batteryHint')}</span>
             </Field>
-            <Field label={t('addStock.imei1')}>
+            <Field label={t('addStock.imei1')} error={errors.imei1}>
               <input type="text" inputMode="numeric" value={form.imei1} onChange={(e) => set('imei1', e.target.value)} />
             </Field>
-            <Field label={t('addStock.imei2')}>
+            <Field label={t('addStock.imei2')} error={errors.imei2}>
               <input type="text" inputMode="numeric" value={form.imei2} onChange={(e) => set('imei2', e.target.value)} />
             </Field>
             <Field label={t('addStock.serial')}>
@@ -363,7 +483,7 @@ export default function AddStockPage() {
             </div>
           </div>
           <div className="grid grid-2">
-            <Field label={t('addStock.purchasePrice')}>
+            <Field label={t('addStock.purchasePrice')} error={errors.purchaseCost}>
               <input type="number" min={0} step="any" value={form.purchaseCost} onChange={(e) => set('purchaseCost', e.target.value)} />
             </Field>
             <Field label={t('common.currency')}>
@@ -372,7 +492,7 @@ export default function AddStockPage() {
                 <option value="USD">USD</option>
               </select>
             </Field>
-            <Field label={t('addStock.sellingPrice')}>
+            <Field label={t('addStock.sellingPrice')} required error={errors.sellingPrice}>
               <input type="number" min={0} step="any" value={form.sellingPrice} onChange={(e) => set('sellingPrice', e.target.value)} />
             </Field>
             <Field label={t('common.currency')}>
@@ -402,7 +522,7 @@ export default function AddStockPage() {
             </div>
           </div>
           <Field label={t('addStock.barcode')} required error={errors.barcode} hint={t('addStock.barcodeHint')}>
-            <div style={{ display: 'flex', gap: 10 }}>
+            <div className="add-stock-barcode-input" style={{ display: 'flex', gap: 10 }}>
               <input type="text" value={form.barcode} onChange={(e) => set('barcode', e.target.value)} placeholder="SHP-…" />
               <Button type="button" variant="secondary" icon="refresh" onClick={() => void generateBarcode()}>
                 {t('addStock.generateBarcode')}
@@ -410,7 +530,7 @@ export default function AddStockPage() {
             </div>
           </Field>
 
-          {form.modelId ? (
+          {modelId ? (
             <div className="review-box">
               <div className="section-header" style={{ margin: 0 }}>
                 <div className="section-title-wrap">
@@ -427,7 +547,7 @@ export default function AddStockPage() {
                   <div className="muted" style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase' }}>
                     {t('stock.model')}
                   </div>
-                  <div style={{ fontWeight: 700 }}>{selectedModel?.name ?? form.modelId}</div>
+                  <div style={{ fontWeight: 700 }}>{selectedModel?.name ?? modelId}</div>
                   <div className="muted" style={{ fontSize: 13 }}>
                     {form.ram} / {form.storage} · {form.colour}
                   </div>
@@ -442,13 +562,13 @@ export default function AddStockPage() {
             </div>
           ) : null}
 
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <div className="add-stock-actions" style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
             <Button variant="secondary" onClick={() => setStep(2)}>
               {t('addStock.continue')}
             </Button>
             <Button
               onClick={() => {
-                void save()
+                void save(false)
               }}
               loading={busy}
               disabled={!form.barcode.trim()}
@@ -458,7 +578,7 @@ export default function AddStockPage() {
             <Button
               variant="secondary"
               onClick={() => {
-                void save()
+                void save(true)
               }}
               loading={busy}
               disabled={!form.barcode.trim()}
@@ -473,6 +593,5 @@ export default function AddStockPage() {
 }
 
 function formatPriceInput(minor: number, currency: Currency): string {
-  const major = minor / (currency === 'USD' ? 100 : 1)
-  return currency === 'USD' ? `$${major.toFixed(2)}` : `${major} IQD`
+  return currency === 'USD' ? `$${minor.toFixed(2)}` : `${new Intl.NumberFormat('en-US').format(minor)} IQD`
 }

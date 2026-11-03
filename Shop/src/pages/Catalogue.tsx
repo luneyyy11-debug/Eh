@@ -26,6 +26,7 @@ export default function CataloguePage() {
   const [brandColor, setBrandColor] = useState('#0b1f3a')
 
   const [editingModelId, setEditingModelId] = useState<string | null>(null)
+  const [modelFormOpen, setModelFormOpen] = useState(false)
   const [modelBrandId, setModelBrandId] = useState('')
   const [modelName, setModelName] = useState('')
   const [modelFamily, setModelFamily] = useState('')
@@ -86,6 +87,7 @@ export default function CataloguePage() {
 
   const startEditModel = (model: PhoneModel) => {
     setEditingModelId(model.id)
+    setModelFormOpen(true)
     setModelBrandId(model.brandId)
     setModelName(model.name)
     setModelFamily(model.family ?? '')
@@ -110,6 +112,7 @@ export default function CataloguePage() {
         await db.models.put({ ...existing, brandId: brand.id, name, family: modelFamily.trim(), specs: modelSpecs.trim(), active: modelActive })
         notify(t('catalogue.saved'))
         setEditingModelId(null)
+        setModelFormOpen(false)
         setModelName('')
         setModelFamily('')
         setModelSpecs('')
@@ -121,6 +124,7 @@ export default function CataloguePage() {
     await db.models.put({ id: uuid(), brandId: brand.id, name, family: modelFamily.trim(), specs: modelSpecs.trim(), image: '/catalog/placeholder.svg', active: true, createdAt: new Date().toISOString() })
     notify(t('catalogue.modelAdded'))
     setEditingModelId(null)
+    setModelFormOpen(false)
     setModelName('')
     setModelFamily('')
     setModelSpecs('')
@@ -205,12 +209,12 @@ export default function CataloguePage() {
         </Card>
       ) : null}
 
-      {editingModelId ? (
+      {modelFormOpen ? (
         <Card>
           <div className="section-header" style={{ marginTop: 0 }}>
             <div className="section-title-wrap">
               <div>
-                <h2>{t('catalogue.editModel')}</h2>
+                <h2>{t(editingModelId ? 'catalogue.editModel' : 'catalogue.addModel')}</h2>
               </div>
             </div>
           </div>
@@ -271,7 +275,7 @@ export default function CataloguePage() {
                 </div>
                 <Badge tone={brand.active ? 'success' : 'neutral'}>{t(brand.active ? 'catalogue.statusActive' : 'catalogue.statusHidden')}</Badge>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <Button variant="secondary" size="sm" icon="plus" onClick={() => { setEditingModelId(null); setModelBrandId(brand.id); setModelName(''); setModelFamily(''); setModelSpecs(''); setModelActive(true); }}>
+                  <Button variant="secondary" size="sm" icon="plus" onClick={() => { setEditingModelId(null); setModelFormOpen(true); setModelBrandId(brand.id); setModelName(''); setModelFamily(''); setModelSpecs(''); setModelActive(true); }}>
                     {t('catalogue.addModel')}
                   </Button>
                   <Button variant="ghost" size="sm" icon="edit" onClick={() => startEditBrand(brand)}>

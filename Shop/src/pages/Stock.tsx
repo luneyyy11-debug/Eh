@@ -78,7 +78,7 @@ export default function StockPage() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div className="stock-page" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <PageHeader
         title={t('stock.title')}
         subtitle={t('stock.subtitle')}
@@ -90,7 +90,7 @@ export default function StockPage() {
       />
 
       <Card>
-        <div className="toolbar">
+        <div className="toolbar stock-filters">
           <SearchInput value={query} onChange={setQuery} placeholder={t('stock.search')} ariaLabel={t('stock.search')} />
           <select value={brandId} onChange={(e) => setBrandId(e.target.value)} style={{ width: 'auto' }} aria-label={t('stock.brand')}>
             <option value="">{t('stock.allBrands')}</option>
@@ -121,7 +121,7 @@ export default function StockPage() {
           </Button>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14 }}>
+        <div className="stock-scan" style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14 }}>
           <SearchInput value={scan} onChange={setScan} placeholder={t('stock.scanPlaceholder')} ariaLabel={t('stock.scanPlaceholder')} />
           <Button onClick={() => void doScan()} icon="scan">
             {t('stock.scanPlaceholder')}
@@ -133,7 +133,7 @@ export default function StockPage() {
         ) : (
           <div className="list">
             {filtered.map((u) => (
-              <div className="list-row" key={u.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/stock/${u.id}`)}>
+              <div className="list-row stock-unit-row" key={u.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/stock/${u.id}`)}>
                 <ModelImage src={modelList.find((m) => m.id === u.modelId)?.image} alt={u.shortId} size="sm" />
                 <div className="list-row-main">
                   <div className="list-row-title">{modelList.find((m) => m.id === u.modelId)?.name ?? u.modelId}</div>
@@ -141,8 +141,8 @@ export default function StockPage() {
                     {u.shortId} · {u.ram} / {u.storage} · {u.colour}
                   </div>
                 </div>
-                <div className="money">{formatMoney(u.sellingPrice, u.sellingCurrency)}</div>
-                <StatusBadge status={u.status} />
+                <div className="money stock-unit-price">{formatMoney(u.sellingPrice, u.sellingCurrency)}</div>
+                <span className="stock-unit-status"><StatusBadge status={u.status} /></span>
               </div>
             ))}
           </div>
